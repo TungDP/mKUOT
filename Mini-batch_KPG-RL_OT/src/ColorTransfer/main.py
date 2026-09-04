@@ -345,7 +345,12 @@ STYLE = {"c": dict(color="#2ca02c", ls="--", marker="o", label="m-KUOT-c (transp
 metric = {row[0]: row[1] for row in metric_rows}
 disper = {row[0]: row[3] for row in metric_rows}
 if strategies and "mUOT" in metric:
-    fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.2))
+    # A visible gap between the panels and tight side margins: the paper includes this
+    # at full \textwidth, so unused margin here shows up as whitespace on the page
+    # (supervisor feedback 2026-09-04).  figs/make_ct_alpha.py replots the same figure
+    # from the metrics CSV and must be kept in step with these settings.
+    fig, axes = plt.subplots(1, 2, figsize=(12.0, 4.6))
+    fig.subplots_adjust(wspace=0.26, left=0.065, right=0.985, bottom=0.135, top=0.91)
     panels = [(metric, r"$W_2^2$ palette distance to target", "(a) endpoint fidelity"),
               (disper, "cross-batch std of the barycentric map",
                "(b) cross-batch consistency")]
@@ -365,7 +370,6 @@ if strategies and "mUOT" in metric:
         for side in ("top", "right"):
             axis.spines[side].set_visible(False)
     axes[0].legend(fontsize=9, frameon=False)
-    plt.tight_layout()
     plt.savefig("images/results/CT_alpha_sensitivity_{}.png".format(pair_tag), dpi=150)
     plt.close(fig)
 
