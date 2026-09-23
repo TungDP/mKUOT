@@ -703,7 +703,21 @@ def train(args):
 
     base_network = base_network.cuda()
     parameter_list = base_network.get_parameters()
-    base_network = torch.nn.DataParallel(base_network).cuda()
+    # Only replicate when more than one device is actually visible.  This used to be
+    # unconditional, which on a single pinned card bought nothing and cost a replica's
+    # worth of memory -- enough to OOM PDA at m=128 on a 16 GB card.  Across cards,
+    # DataParallel was measured ~80x slower than one GPU at these batch sizes.
+    if torch.cuda.device_count() > 1:
+        base_network = torch.nn.DataParallel(base_network).cuda()
+        print(f"[mkot] DataParallel over {torch.cuda.device_count()} visible devices")
+
+    # Optional mixed precision (env MKUOT_AMP=1): halves activation memory, which is
+    # what makes PDA at m=128 fit a single 16 GB card.  Same env switch as the
+    # closed-set trainer (DeepDA/office/train.py) so the two are configured alike.
+    use_amp = os.environ.get("MKUOT_AMP", "0") == "1"
+    amp_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
+    if use_amp:
+        print("[mkot] mixed precision enabled via MKUOT_AMP=1")
 
     optimizer_config = {
         "type": torch.optim.SGD,
@@ -809,21 +823,22 @@ def train(args):
             # `centroid` oracle keypoint strategy.
             yt_np = yt.numpy() if args.kp_strategy == "centroid" else None
 
-            g_xs, f_g_xs = base_network(xs)
-            g_xt, f_g_xt = base_network(xt)
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                g_xs, f_g_xs = base_network(xs)
+                g_xt, f_g_xt = base_network(xt)
 
-            pred_xt = F.softmax(f_g_xt, 1)
+                pred_xt = F.softmax(f_g_xt, 1)
 
-            classifier_loss = torch.nn.CrossEntropyLoss()(f_g_xs, ys) / k
+                classifier_loss = torch.nn.CrossEntropyLoss()(f_g_xs, ys) / k
 
-            ys_oh   = F.one_hot(ys, num_classes=args.class_num).float()
-            M_embed = torch.cdist(g_xs, g_xt) ** 2
-            M_sce   = -torch.mm(ys_oh, torch.log(pred_xt + 1e-10).T)
-            M       = eta1 * M_embed + eta2 * M_sce
+                ys_oh   = F.one_hot(ys, num_classes=args.class_num).float()
+                M_embed = torch.cdist(g_xs, g_xt) ** 2
+                M_sce   = -torch.mm(ys_oh, torch.log(pred_xt + 1e-10).T)
+                M       = eta1 * M_embed + eta2 * M_sce
 
             a      = ot.unif(g_xs.size(0))
             b      = ot.unif(g_xt.size(0))
-            M_cpu  = M.detach().cpu().numpy()
+            M_cpu  = M.detach().float().cpu().numpy()   # .float(): M is fp16 under autocast
 
             if use_kpg and kp_bank is not None:
                 # Sec. IV: mask (Eq. 6) + guiding matrix (Eq. 9) + blend (Eq. 10), solved
@@ -839,8 +854,8 @@ def train(args):
                     eps_eff = args.kuot_eps
                 pi = guided_plan(
                     M_cpu,
-                    feat_s=g_xs.detach().cpu().numpy().astype(np.float64),
-                    feat_t=g_xt.detach().cpu().numpy().astype(np.float64),
+                    feat_s=g_xs.detach().float().cpu().numpy().astype(np.float64),
+                    feat_t=g_xt.detach().float().cpu().numpy().astype(np.float64),
                     k=kp_bank.k, alpha=alpha, rho=args.rho,
                     metric=args.kp_metric, ot_type=ot_type,
                     eps=eps_eff,
@@ -875,9 +890,10 @@ def train(args):
                 print(log_str)
 
             total_loss = classifier_loss + transfer_loss
-            total_loss.backward()
+            amp_scaler.scale(total_loss).backward()
 
-        optimizer.step()
+        amp_scaler.step(optimizer)
+        amp_scaler.update()
 
     log_str = "Acc: {:.2f}\n".format(np.round(best_acc * 100, 2))
     args.out_file.write(log_str)
@@ -972,7 +988,11 @@ if __name__ == "__main__":
     if args.dset == "office_home":
         names = ["Art", "Clipart", "Product", "RealWorld"]
         args.class_num   = 65
-        args.max_iterations = 5000
+        # Was an unconditional override, which silently discarded any --max_iterations
+        # given on the command line (it made a 500-iteration smoke test run 5000).
+        # Keep 5000 as the protocol default, but let an explicit flag win.
+        if args.max_iterations == parser.get_default("max_iterations"):
+            args.max_iterations = 5000
         args.test_interval  = 500
 
     data_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
