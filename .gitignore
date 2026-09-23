@@ -171,6 +171,6 @@ init
 *_locks
 
 # Temporary scripts
-Mini-batch_Keypoint-Guided-Relative_OT/Mini-batch_KPG-RL_OT/src/DeepDA/sh/CTRL-pda-baseline.sh
-Mini-batch_Keypoint-Guided-Relative_OT/Mini-batch_KPG-RL_OT/src/DeepDA/sh/CTRL-oh-baseline.sh
-Mini-batch_Keypoint-Guided-Relative_OT/Mini-batch_KPG-RL_OT/src/DeepDA/sh/S1-mKOT.sh
+Mini-batch_KPG-RL_OT/src/DeepDA/sh/CTRL-pda-baseline.sh
+Mini-batch_KPG-RL_OT/src/DeepDA/sh/CTRL-oh-baseline.sh
+Mini-batch_KPG-RL_OT/src/DeepDA/sh/S1-mKOT.sh
